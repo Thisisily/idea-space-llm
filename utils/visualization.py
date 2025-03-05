@@ -5,6 +5,7 @@ from matplotlib.colors import ListedColormap
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import seaborn as sns
+from sklearn.preprocessing import StandardScaler
 
 class VisualizationUtils:
     """
@@ -34,10 +35,20 @@ class VisualizationUtils:
         if isinstance(embeddings, torch.Tensor):
             embeddings = embeddings.detach().cpu().numpy()
             
+        # Add small random noise to embeddings to ensure they're not identical
+        # This helps when embeddings are very similar or when using a pre-trained model
+        # without fine-tuning
+        noise_scale = 1e-4
+        np.random.seed(42)  # For reproducibility
+        embeddings = embeddings + np.random.normal(0, noise_scale, embeddings.shape)
+        
         # Reduce dimensions
         if method == "pca":
             reducer = PCA(n_components=2)
             reduced_embeddings = reducer.fit_transform(embeddings)
+            # Get explained variance
+            explained_variance = reducer.explained_variance_ratio_
+            print(f"PCA explained variance: {explained_variance[0]:.4f}, {explained_variance[1]:.4f}")
             method_name = "PCA"
         elif method == "tsne":
             # Compute an appropriate perplexity value - must be less than the number of samples
@@ -45,14 +56,24 @@ class VisualizationUtils:
             perplexity = min(30, max(5, n_samples // 3))  # Between 5 and 30, or n_samples/3
             print(f"Using t-SNE with perplexity={perplexity} for {n_samples} samples")
             
-            reducer = TSNE(n_components=2, perplexity=perplexity, random_state=42)
+            # Use stronger exaggeration to better separate clusters
+            reducer = TSNE(n_components=2, perplexity=perplexity, random_state=42,
+                         early_exaggeration=12.0, learning_rate=200.0, n_iter=2000)
             reduced_embeddings = reducer.fit_transform(embeddings)
             method_name = "t-SNE"
         else:
             raise ValueError(f"Unsupported dimensionality reduction method: {method}")
+        
+        # Scale the reduced embeddings to better spread the points
+        # This ensures points don't all cluster at the origin
+        scaler = StandardScaler()
+        reduced_embeddings = scaler.fit_transform(reduced_embeddings)
             
         # Create figure
         fig, ax = plt.subplots(figsize=figsize)
+        
+        # Increase marker size for better visibility
+        markersize = 100
         
         # Color points by label if provided
         if labels is not None:
@@ -60,14 +81,15 @@ class VisualizationUtils:
             cmap = plt.get_cmap(colormap, len(unique_labels))
             
             for i, label in enumerate(unique_labels):
-                mask = labels == label
+                mask = np.array([l == label for l in labels])
                 ax.scatter(
                     reduced_embeddings[mask, 0],
                     reduced_embeddings[mask, 1],
                     c=[cmap(i)],
                     label=label,
                     marker=marker,
-                    alpha=alpha
+                    alpha=alpha,
+                    s=markersize
                 )
             ax.legend()
         else:
@@ -75,22 +97,18 @@ class VisualizationUtils:
                 reduced_embeddings[:, 0],
                 reduced_embeddings[:, 1],
                 marker=marker,
-                alpha=alpha
+                alpha=alpha,
+                s=markersize
             )
+        
+        # Add grid for better readability
+        ax.grid(True, linestyle='--', alpha=0.6)
             
-        # Add text annotations if labels are strings
-        if labels is not None and isinstance(labels[0], str):
-            for i, txt in enumerate(labels):
-                ax.annotate(txt, (reduced_embeddings[i, 0], reduced_embeddings[i, 1]))
-                
         # Set title and labels
-        if title:
-            ax.set_title(title)
-        else:
-            ax.set_title(f"Embeddings visualized with {method_name}")
-            
-        ax.set_xlabel(f"Dimension 1")
-        ax.set_ylabel(f"Dimension 2")
+        method_title = f"{method_name} Visualization of Latent Space"
+        ax.set_title(title if title is not None else method_title)
+        ax.set_xlabel("Dimension 1")
+        ax.set_ylabel("Dimension 2")
         
         plt.tight_layout()
         return fig
